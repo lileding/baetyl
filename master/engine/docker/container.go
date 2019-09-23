@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/baetyl/baetyl/master/engine"
-	"github.com/baetyl/baetyl/sdk/baetyl-go"
+	baetyl "github.com/baetyl/baetyl/sdk/baetyl-go"
 	"github.com/baetyl/baetyl/utils"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -66,7 +66,7 @@ func (e *dockerEngine) initVolumes(volumeInfos ComposeVolumes) error {
 			e.log.Debugf("volume %s already exists", name)
 			continue
 		}
-		volumeParams := volumetypes.VolumeCreateBody{
+		volumeParams := volumetypes.VolumesCreateBody{
 			Name:       name,
 			Driver:     volumeInfo.Driver,
 			DriverOpts: volumeInfo.DriverOpts,
@@ -122,8 +122,8 @@ func (e *dockerEngine) initNetworks(networks ComposeNetworks) error {
 			networkParams := types.NetworkCreate{
 				Driver:  network.Driver,
 				Options: network.DriverOpts,
-				Scope:   "local",
-				Labels:  network.Labels,
+				/* Scope:   "local", FIXME v1.13*/
+				Labels: network.Labels,
 			}
 			nw, err := e.cli.NetworkCreate(ctx, networkName, networkParams)
 			if err != nil {
@@ -201,6 +201,19 @@ func (e *dockerEngine) restartContainer(cid string) error {
 func (e *dockerEngine) waitContainer(cid string) error {
 	t := time.Now()
 	ctx := context.Background()
+	status, err := e.cli.ContainerWait(ctx, cid)
+	if err != nil {
+		e.logsContainer(cid, t)
+		e.log.WithError(err).Warnf("failed to wait container (%s)", cid[:12])
+		return err
+	}
+	e.logsContainer(cid, t)
+	e.log.Debugf("container (%s) exit status: %v", cid[:12], status)
+	if status != 0 {
+		return fmt.Errorf("container exit code: %d", status)
+	}
+	return nil
+	/* FIXME no 3rd argument before v1.13
 	statusChan, errChan := e.cli.ContainerWait(ctx, cid, container.WaitConditionNotRunning)
 	select {
 	case err := <-errChan:
@@ -218,6 +231,7 @@ func (e *dockerEngine) waitContainer(cid string) error {
 			return nil
 		}
 	}
+	*/
 }
 
 func (e *dockerEngine) stopContainer(cid string) error {
@@ -229,7 +243,19 @@ func (e *dockerEngine) stopContainer(cid string) error {
 		e.log.WithError(err).Warnf("failed to stop container (%s)", cid[:12])
 		return err
 	}
+	statusChan := make(chan int64)
+	errChan := make(chan error)
+	go func() {
+		status, err := e.cli.ContainerWait(ctx, cid)
+		if err != nil {
+			errChan <- err
+		} else {
+			statusChan <- status
+		}
+	}()
+	/* FIXME no 3rd argument before v1.13
 	statusChan, errChan := e.cli.ContainerWait(ctx, cid, container.WaitConditionNotRunning)
+	*/
 	select {
 	case <-time.After(e.grace):
 		// e.cli.ContainerKill(ctx, cid, "9")
